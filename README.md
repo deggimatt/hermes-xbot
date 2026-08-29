@@ -23,9 +23,9 @@ You can download and install the pre-built APK directly:
 ## 📱 Screenshots
 
 <div align="center">
-  <img src="docs/screenshots/dark_mode.png" width="340" alt="Hermes XBot Dark Mode" />
+  <img src="docs/screenshots/dark_mode.jpg" width="340" alt="Hermes XBot Teammates Hub (Dark Mode)" />
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/chat_screen.png" width="340" alt="Hermes XBot Chat Cockpit" />
+  <img src="docs/screenshots/light_mode.jpg" width="340" alt="Hermes XBot Teammates Hub (Custom Header Color)" />
 </div>
 
 ---
