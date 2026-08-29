@@ -5,7 +5,7 @@
 [![Hermes Agent](https://img.shields.io/badge/Powered_by-Hermes_Agent-FFD700.svg)](https://hermes-agent.nousresearch.com)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
 
-**Hermes XBot** is a native Android companion and autonomous teammate cockpit for [Hermes Agent](https://hermes-agent.nousresearch.com) and `hermes-webui`. Designed with a modern **Grok Bot** style experience, it puts your specialized AI agents (Engineering, Research, DevOps, Outreach) front-and-center as distinct, interactive teammates with real-time tool telemetry and background task handoffs.
+**Hermes XBot** is a native Android companion and autonomous teammate cockpit for [Hermes Agent](https://hermes-agent.nousresearch.com) and `hermes-webui`. Designed as an autonomous AI teammate cockpit, it puts your specialized AI agents (Engineering, Research, DevOps, Outreach) front-and-center as distinct, interactive teammates with real-time tool telemetry and background task handoffs.
 
 > ℹ️ **Attribution**: Hermes XBot is proudly built upon the foundational open-source architecture and API contracts of [**Hermex**](https://github.com/uzairansaruzi/hermex) (by Uzair Ansar) and the [**hermex-android-port**](https://github.com/Hungbocluaqua/hermex-android-port). We express our gratitude to the upstream authors for establishing the mobile REST + SSE foundations.
 
@@ -48,7 +48,7 @@ You can download and install the pre-built APK directly:
 - **Android Share Target**: Share URLs, text, or photos from Chrome, Twitter/X, and file managers straight into an active session.
 - **Background Stream Resilience**: Foreground sync service ensures streaming tasks continue uninterrupted when the screen is locked.
 
-### 4. 🎨 Grok-Style Adaptive UI & Themes
+### 4. 🎨 Modern Adaptive UI & OLED Themes
 - **OLED Pitch Black & Slate Cards** in Dark Mode (`#000000` / `#0C0E14` with electric blue `#2F80ED` accents).
 - **Crisp Slate & Pure White Surfaces** in Light Mode (`#FFFFFF` with `#E2E8F0` borders).
 - **Dynamic Header Logo Color Tinting**: The `HERMES XBot` top typography dynamically adopts your customized accent color from Settings.
