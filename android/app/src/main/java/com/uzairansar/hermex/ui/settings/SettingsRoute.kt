@@ -259,27 +259,6 @@ fun SettingsRoute(
                         onValueChange = viewModel::setTintPrimaryActionsWithThemeColor,
                     )
                     SettingsFootnote("Apply your header color to these primary buttons.")
-                    SettingsDivider()
-                    AppIconSettingsPicker(
-                        selected = selectedAppIcon,
-                        isExpanded = isAppIconPickerExpanded,
-                        errorMessage = appIconErrorMessage,
-                        onToggleExpanded = { isAppIconPickerExpanded = !isAppIconPickerExpanded },
-                        onSelect = { choice ->
-                            appIconErrorMessage = null
-                            appIconManager.setChoice(choice)
-                                .onSuccess {
-                                    selectedAppIcon = it
-                                    isAppIconPickerExpanded = false
-                                }
-                                .onFailure { error ->
-                                    selectedAppIcon = runCatching(appIconManager::currentChoice)
-                                        .getOrDefault(AppIconChoice.Default)
-                                    appIconErrorMessage = error.message ?: "Unable to update the launcher icon."
-                                    isAppIconPickerExpanded = true
-                                }
-                        },
-                    )
                 }
             }
             item {
