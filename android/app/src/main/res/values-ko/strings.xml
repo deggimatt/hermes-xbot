@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">Hermex</string>
+    <string name="share_target_label">보내기 ? Hermex</string>
+    <string name="shortcut_sessions_short">세션</string>
+    <string name="shortcut_sessions_long">세션</string>
+    <string name="shortcut_new_session_short">새 세션</string>
+    <string name="shortcut_new_session_long">새 세션 시작</string>
+    <string name="shortcut_new_voice_short">음성 입력</string>
+    <string name="shortcut_new_voice_long">음성 입력</string>
+    <string name="widget_description">새 채팅</string>
+    <string name="widget_subtitle">Jump back into your agent workspace.</string>
+    <string name="widget_open_sessions">세션</string>
+    <string name="widget_new_session">새 세션</string>
+    <string name="widget_new_voice">음성 입력</string>
+    <string name="nav_tasks">작업</string>
+    <string name="nav_kanban">칸반</string>
+    <string name="nav_skills">스킬</string>
+    <string name="nav_memory">메모리</string>
+    <string name="nav_insights">인사이트</string>
+    <string name="nav_active_profile">활성 프로필</string>
+    <string name="nav_projects">프로젝트</string>
+    <string name="sessions_title">세션</string>
+    <string name="archived_sessions_title">보관된 세션</string>
+    <string name="new_chat">새 채팅</string>
+    <string name="search_sessions">세션 검색</string>
+    <string name="close_search">검색 닫기</string>
+    <string name="settings_title">설정</string>
+</resources>

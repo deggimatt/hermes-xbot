@@ -1,0 +1,1 @@
+Completes Android parity for responsive chat, sharing, deep links, voice input, workspace export, profile shortcuts, streaming recovery, and 18 locales. Fixes clipped chat headers, stale session lists, and model selection after reopening sessions whose provider aliases differ.

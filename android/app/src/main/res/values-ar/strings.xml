@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">Hermex</string>
+    <string name="share_target_label">إرسال ? Hermex</string>
+    <string name="shortcut_sessions_short">الجلسات</string>
+    <string name="shortcut_sessions_long">الجلسات</string>
+    <string name="shortcut_new_session_short">جلسة جديدة</string>
+    <string name="shortcut_new_session_long">بدء جلسة جديدة</string>
+    <string name="shortcut_new_voice_short">الإدخال الصوتي</string>
+    <string name="shortcut_new_voice_long">الإدخال الصوتي</string>
+    <string name="widget_description">محادثة جديدة</string>
+    <string name="widget_subtitle">Jump back into your agent workspace.</string>
+    <string name="widget_open_sessions">الجلسات</string>
+    <string name="widget_new_session">جلسة جديدة</string>
+    <string name="widget_new_voice">الإدخال الصوتي</string>
+    <string name="nav_tasks">المهام</string>
+    <string name="nav_kanban">كانبان</string>
+    <string name="nav_skills">المهارات</string>
+    <string name="nav_memory">الذاكرة</string>
+    <string name="nav_insights">إحصاءات</string>
+    <string name="nav_active_profile">ملف التعريف النشط</string>
+    <string name="nav_projects">المشاريع</string>
+    <string name="sessions_title">الجلسات</string>
+    <string name="archived_sessions_title">الجلسات المؤرشفة</string>
+    <string name="new_chat">محادثة جديدة</string>
+    <string name="search_sessions">البحث في الجلسات</string>
+    <string name="close_search">إغلاق البحث</string>
+    <string name="settings_title">الإعدادات</string>
+</resources>

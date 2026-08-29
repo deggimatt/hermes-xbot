@@ -1,0 +1,1 @@
+Introduces production Kanban with Boards, Cards, live updates, workflow and bulk actions, Board management, Dispatcher, offline safety, and full iOS parity. Also improves streaming recovery, workspace Markdown previews, file artifacts, and safe private-network onboarding.

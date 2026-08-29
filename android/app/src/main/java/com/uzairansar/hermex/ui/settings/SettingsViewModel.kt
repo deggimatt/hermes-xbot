@@ -1,0 +1,1657 @@
+package com.uzairansar.hermex.ui.settings
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
+import com.uzairansar.hermex.ui.SavedStatePolicy
+import com.uzairansar.hermex.ui.setBoundedEncodedState
+import com.uzairansar.hermex.core.runSuspendCatching
+import com.uzairansar.hermex.core.network.HermesJson
+import com.uzairansar.hermex.core.model.ModelSummary
+import com.uzairansar.hermex.core.model.ModelCatalogResponse
+import com.uzairansar.hermex.core.model.ProfileSummary
+import com.uzairansar.hermex.core.model.ProfilesResponse
+import com.uzairansar.hermex.core.model.ProviderSummary
+import com.uzairansar.hermex.core.model.ProvidersResponse
+import com.uzairansar.hermex.core.model.SettingsResponse
+import com.uzairansar.hermex.core.model.UpdatesCheckResponse
+import com.uzairansar.hermex.core.model.isConfirmedDefaultModel
+import com.uzairansar.hermex.core.model.isConfirmedProfileSwitch
+import com.uzairansar.hermex.core.model.isConfirmedMutation
+import com.uzairansar.hermex.core.model.isConfirmedShowCliSessions
+import com.uzairansar.hermex.core.model.isConfirmedShowClaudeCodeSessions
+import com.uzairansar.hermex.core.network.CustomHeader
+import com.uzairansar.hermex.core.network.parseCustomHeaderLines
+import com.uzairansar.hermex.data.repository.AddServerResult
+import com.uzairansar.hermex.data.repository.AuthState
+import com.uzairansar.hermex.data.preferences.modelIdentifier
+import com.uzairansar.hermex.data.preferences.normalizedProvider
+import com.uzairansar.hermex.data.preferences.AppThemeMode
+import com.uzairansar.hermex.data.preferences.ChatDisplaySettings
+import com.uzairansar.hermex.data.preferences.DictationProviderPreference
+import com.uzairansar.hermex.data.preferences.LocalSettingsRepository
+import com.uzairansar.hermex.data.preferences.MainPageDisplaySettings
+import com.uzairansar.hermex.data.preferences.SessionRowDisplaySettings
+import com.uzairansar.hermex.data.preferences.SessionIdentitySettings
+import com.uzairansar.hermex.data.preferences.StreamingSendBehavior
+import com.uzairansar.hermex.data.repository.AuthRepository
+import com.uzairansar.hermex.data.repository.CacheMaintenanceRepository
+import com.uzairansar.hermex.data.repository.PanelsRepository
+import com.uzairansar.hermex.data.secure.ServerAccount
+import com.uzairansar.hermex.data.secure.ServerRegistrySnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlinx.serialization.Serializable
+
+private data class ServerSettingsResults(
+    val models: Result<ModelCatalogResponse>,
+    val providers: Result<ProvidersResponse>,
+    val profiles: Result<ProfilesResponse>,
+    val settings: Result<SettingsResponse>,
+    val updates: Result<UpdatesCheckResponse>,
+)
+
+data class SettingsUiState(
+    val themeMode: AppThemeMode = AppThemeMode.System,
+    val tintPrimaryActionsWithThemeColor: Boolean = false,
+    val hapticsEnabled: Boolean = true,
+    val sessionIdentitySettings: SessionIdentitySettings = SessionIdentitySettings(),
+    val headerLogoColorHex: String = "#FFD700",
+    val streamingSendBehavior: StreamingSendBehavior = StreamingSendBehavior.Steer,
+    val dictationProviderPreference: DictationProviderPreference = DictationProviderPreference.ServerFirst,
+    val chatDisplaySettings: ChatDisplaySettings = ChatDisplaySettings(),
+    val sessionRowDisplaySettings: SessionRowDisplaySettings = SessionRowDisplaySettings(),
+    val mainPageDisplaySettings: MainPageDisplaySettings = MainPageDisplaySettings(),
+    val responseCompletionNotificationsEnabled: Boolean = false,
+    val hasRequestedResponseCompletionNotificationPermission: Boolean = false,
+    val responseCompletionNotificationStatusMessage: String? = null,
+    val serverSnapshot: ServerRegistrySnapshot = ServerRegistrySnapshot(),
+    val showCliSessions: Boolean = true,
+    val cliSessionsServerSynced: Boolean = false,
+    val isSavingCliSessions: Boolean = false,
+    val cliSessionsError: String? = null,
+    val showClaudeCodeSessions: Boolean = true,
+    val claudeCodeSessionsServerSynced: Boolean = false,
+    val isSavingClaudeCodeSessions: Boolean = false,
+    val claudeCodeSessionsError: String? = null,
+    val isSigningOut: Boolean = false,
+    val isLoadingServerSettings: Boolean = false,
+    val isSavingDefaultModel: Boolean = false,
+    val isSavingDefaultProfile: Boolean = false,
+    val isLoadingLiveModels: Boolean = false,
+    val showDefaultModelPicker: Boolean = false,
+    val defaultModelPickerError: String? = null,
+    val showDefaultProfilePicker: Boolean = false,
+    val defaultProfilePickerError: String? = null,
+    val models: List<ModelSummary> = emptyList(),
+    val modelProviders: List<ProviderSummary> = emptyList(),
+    val providers: List<ProviderSummary> = emptyList(),
+    val activeProvider: String? = null,
+    val providersError: String? = null,
+    val defaultModel: String? = null,
+    val defaultModelProvider: String? = null,
+    val profiles: List<ProfileSummary> = emptyList(),
+    val activeProfile: String? = null,
+    val isSingleProfileMode: Boolean = false,
+    val showCreateProfileDialog: Boolean = false,
+    val isCreatingProfile: Boolean = false,
+    val profileCreateError: String? = null,
+    val serverSettings: SettingsResponse? = null,
+    val serverUpdateState: WebUiUpdateState? = null,
+    val isCheckingForUpdates: Boolean = false,
+    val forcedUpdateCheckOutcome: ForcedUpdateCheckOutcome? = null,
+    val showForcedUpdateCheckResult: Boolean = false,
+    val confirmServerUpdate: Boolean = false,
+    val updateApplyPhase: ServerUpdateApplyPhase = ServerUpdateApplyPhase.Idle,
+    val updateApplyMessage: String? = null,
+    val customHeadersByServer: Map<String, List<CustomHeader>> = emptyMap(),
+    val identityEditorServer: ServerAccount? = null,
+    val identityDraft: ServerIdentityDraft = ServerIdentityDraft(),
+    val headerEditorServer: ServerAccount? = null,
+    val headerEditorText: String = "",
+    val headerEditorError: String? = null,
+    val isAddingServer: Boolean = false,
+    val addServerDialogVisible: Boolean = false,
+    val addServerUrl: String = "",
+    val addServerPassword: String = "",
+    val addServerHeadersText: String = "",
+    val addServerDisplayName: String = "",
+    val addServerInitials: String = "",
+    val addServerHeaderColorHex: String = DefaultServerHeaderColorHex,
+    val addServerNeedsPassword: Boolean = false,
+    val addServerError: String? = null,
+    val clearCacheServer: ServerAccount? = null,
+    val forgetServer: ServerAccount? = null,
+    val isForgettingServer: Boolean = false,
+    val isClearingCache: Boolean = false,
+    val isMaintainingCache: Boolean = false,
+    val notice: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class ServerIdentityDraft(
+    val displayName: String = "",
+    val initials: String = "",
+    val headerLogoColorHex: String = DefaultServerHeaderColorHex,
+)
+
+@Serializable
+private data class SettingsSavedState(
+    val showDefaultModelPicker: Boolean = false,
+    val showDefaultProfilePicker: Boolean = false,
+    val showCreateProfileDialog: Boolean = false,
+    val identityEditorServerId: String? = null,
+    val identityDraft: ServerIdentityDraft = ServerIdentityDraft(),
+    val addServerDialogVisible: Boolean = false,
+    val addServerUrl: String = "",
+    val addServerDisplayName: String = "",
+    val addServerInitials: String = "",
+    val addServerHeaderColorHex: String = DefaultServerHeaderColorHex,
+    val clearCacheServerId: String? = null,
+    val forgetServerId: String? = null,
+    val confirmServerUpdate: Boolean = false,
+) {
+    companion object {
+        fun from(state: SettingsUiState): SettingsSavedState = SettingsSavedState(
+            showDefaultModelPicker = state.showDefaultModelPicker,
+            showDefaultProfilePicker = state.showDefaultProfilePicker,
+            showCreateProfileDialog = state.showCreateProfileDialog,
+            identityEditorServerId = state.identityEditorServer?.id,
+            identityDraft = state.identityDraft,
+            addServerDialogVisible = state.addServerDialogVisible,
+            addServerUrl = state.addServerUrl,
+            addServerDisplayName = state.addServerDisplayName,
+            addServerInitials = state.addServerInitials,
+            addServerHeaderColorHex = state.addServerHeaderColorHex,
+            clearCacheServerId = state.clearCacheServer?.id,
+            forgetServerId = state.forgetServer?.id,
+            confirmServerUpdate = state.confirmServerUpdate,
+        )
+    }
+}
+
+sealed interface SettingsEvent {
+    data object SignedOut : SettingsEvent
+}
+
+class SettingsViewModel(
+    private val authRepository: AuthRepository,
+    private val localSettingsRepository: LocalSettingsRepository,
+    private val cacheMaintenanceRepository: CacheMaintenanceRepository?,
+    private val panelsRepository: PanelsRepository?,
+    private val savedStateHandle: SavedStateHandle? = null,
+) : ViewModel() {
+    private val initialServerSnapshot = authRepository.servers.value
+    private val initialActiveAccount = initialServerSnapshot.servers.firstOrNull {
+        it.id == initialServerSnapshot.activeServerId
+    }
+    private val restoredState = savedStateHandle?.get<String>(SETTINGS_SAVED_TRANSIENT_STATE)
+        ?.let { encoded -> runCatching { HermesJson.decodeFromString<SettingsSavedState>(encoded) }.getOrNull() }
+    private val _state = MutableStateFlow(
+        SettingsUiState(
+            serverSnapshot = initialServerSnapshot,
+            sessionIdentitySettings = initialActiveAccount?.let {
+                SessionIdentitySettings(displayName = it.displayName, initials = it.initials)
+            } ?: SessionIdentitySettings(),
+            headerLogoColorHex = initialActiveAccount?.headerLogoColorHex ?: DefaultServerHeaderColorHex,
+            showDefaultModelPicker = restoredState?.showDefaultModelPicker == true,
+            showDefaultProfilePicker = restoredState?.showDefaultProfilePicker == true,
+            showCreateProfileDialog = restoredState?.showCreateProfileDialog == true,
+            identityEditorServer = restoredState?.identityEditorServerId?.let { id ->
+                initialServerSnapshot.servers.firstOrNull { it.id == id }
+            },
+            identityDraft = restoredState?.identityDraft ?: ServerIdentityDraft(),
+            addServerDialogVisible = restoredState?.addServerDialogVisible == true,
+            addServerUrl = restoredState?.addServerUrl.orEmpty(),
+            addServerDisplayName = restoredState?.addServerDisplayName.orEmpty(),
+            addServerInitials = restoredState?.addServerInitials.orEmpty(),
+            addServerHeaderColorHex = restoredState?.addServerHeaderColorHex ?: DefaultServerHeaderColorHex,
+            clearCacheServer = restoredState?.clearCacheServerId?.let { id ->
+                initialServerSnapshot.servers.firstOrNull { it.id == id }
+            },
+            forgetServer = restoredState?.forgetServerId?.let { id ->
+                initialServerSnapshot.servers.firstOrNull { it.id == id }
+            },
+            confirmServerUpdate = restoredState?.confirmServerUpdate == true,
+        ),
+    )
+    val state: StateFlow<SettingsUiState> = _state
+    private val eventChannel = Channel<SettingsEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
+    private var identityPersistenceJob: Job? = null
+    private var identityPersistenceGeneration = 0L
+    private var serverSettingsJob: Job? = null
+    private var serverSettingsGeneration = 0L
+    private var cliSessionsSaveJob: Job? = null
+    private var cliSessionsSaveGeneration = 0L
+    private var claudeCodeSessionsSaveJob: Job? = null
+    private var claudeCodeSessionsSaveGeneration = 0L
+
+    init {
+        viewModelScope.launch {
+            _state.collectLatest { current ->
+                val encoded = withContext(Dispatchers.Default) {
+                    HermesJson.encodeToString(SettingsSavedState.from(current))
+                }
+                savedStateHandle?.setBoundedEncodedState(SETTINGS_SAVED_TRANSIENT_STATE, encoded)
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.themeMode.collectLatest { mode ->
+                _state.update { it.copy(themeMode = mode) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.streamingSendBehavior.collectLatest { behavior ->
+                _state.update { it.copy(streamingSendBehavior = behavior) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.dictationProviderPreference.collectLatest { preference ->
+                _state.update { it.copy(dictationProviderPreference = preference) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.tintPrimaryActionsWithThemeColor.collectLatest { enabled ->
+                _state.update { it.copy(tintPrimaryActionsWithThemeColor = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.hapticsEnabled.collectLatest { enabled ->
+                _state.update { it.copy(hapticsEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.chatDisplaySettings.collectLatest { displaySettings ->
+                _state.update { it.copy(chatDisplaySettings = displaySettings) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.sessionRowDisplaySettings.collectLatest { displaySettings ->
+                _state.update { it.copy(sessionRowDisplaySettings = displaySettings) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.mainPageDisplaySettings.collectLatest { displaySettings ->
+                _state.update { it.copy(mainPageDisplaySettings = displaySettings) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.responseCompletionNotificationsEnabled.collectLatest { enabled ->
+                _state.update { it.copy(responseCompletionNotificationsEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            localSettingsRepository.hasRequestedResponseCompletionNotificationPermission.collectLatest { requested ->
+                _state.update { it.copy(hasRequestedResponseCompletionNotificationPermission = requested) }
+            }
+        }
+        viewModelScope.launch {
+            authRepository.servers.collectLatest { snapshot ->
+                val activeAccount = snapshot.servers.firstOrNull { it.id == snapshot.activeServerId }
+                _state.update {
+                    it.copy(
+                        serverSnapshot = snapshot,
+                        sessionIdentitySettings = activeAccount?.let { account ->
+                            SessionIdentitySettings(
+                                displayName = account.displayName,
+                                initials = account.initials,
+                            )
+                        } ?: it.sessionIdentitySettings,
+                        headerLogoColorHex = activeAccount?.headerLogoColorHex ?: it.headerLogoColorHex,
+                        customHeadersByServer = snapshot.servers.associate { account ->
+                            account.id to authRepository.customHeaders(account.id)
+                        },
+                    )
+                }
+                activeAccount?.let { account ->
+                    localSettingsRepository.setSessionIdentityDisplayName(account.displayName)
+                    localSettingsRepository.setSessionIdentityInitials(account.initials)
+                    localSettingsRepository.setHeaderLogoColorHex(account.headerLogoColorHex)
+                }
+            }
+        }
+        loadServerSettings()
+    }
+
+    private val activeServerId: String?
+        get() = _state.value.serverSnapshot.activeServerId
+
+    fun setThemeMode(mode: AppThemeMode) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setThemeMode(mode) }
+                .onSuccess { _state.update { it.copy(themeMode = mode, notice = "Appearance updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update appearance.") } }
+        }
+    }
+
+    fun setStreamingSendBehavior(behavior: StreamingSendBehavior) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setStreamingSendBehavior(behavior) }
+                .onSuccess { _state.update { it.copy(streamingSendBehavior = behavior, notice = "Interaction updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update interaction behavior.") } }
+        }
+    }
+
+    fun setTintPrimaryActionsWithThemeColor(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setTintPrimaryActionsWithThemeColor(enabled) }
+                .onSuccess { _state.update { it.copy(tintPrimaryActionsWithThemeColor = enabled, notice = "Appearance updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update appearance.") } }
+        }
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setHapticsEnabled(enabled) }
+                .onSuccess { _state.update { it.copy(hapticsEnabled = enabled, notice = "Interaction updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update haptic feedback.") } }
+        }
+    }
+
+    fun setSessionIdentityDisplayName(displayName: String) {
+        val limited = displayName.take(80)
+        _state.update {
+            it.copy(sessionIdentitySettings = it.sessionIdentitySettings.copy(displayName = limited))
+        }
+        persistActiveSessionIdentity()
+    }
+
+    fun setSessionIdentityInitials(initials: String) {
+        val normalized = normalizedInitials(initials)
+        _state.update {
+            it.copy(sessionIdentitySettings = it.sessionIdentitySettings.copy(initials = normalized))
+        }
+        persistActiveSessionIdentity()
+    }
+
+    fun setHeaderLogoColorHex(colorHex: String) {
+        val normalized = normalizedHeaderColorHex(colorHex)
+        _state.update { it.copy(headerLogoColorHex = normalized) }
+        persistActiveSessionIdentity(successNotice = "Appearance updated.")
+    }
+
+    private fun persistActiveSessionIdentity(successNotice: String? = null) {
+        val snapshot = _state.value
+        val targetAccount = currentActiveServerAccount()
+        val identity = snapshot.sessionIdentitySettings
+        val color = snapshot.headerLogoColorHex
+        val generation = ++identityPersistenceGeneration
+        identityPersistenceJob?.cancel()
+        identityPersistenceJob = viewModelScope.launch {
+            runSuspendCatching {
+                localSettingsRepository.setSessionIdentity(
+                    displayName = identity.displayName,
+                    initials = identity.initials,
+                    headerLogoColorHex = color,
+                )
+                if (
+                    generation == identityPersistenceGeneration &&
+                    targetAccount != null &&
+                    currentActiveServerAccount()?.id == targetAccount.id
+                ) {
+                    updateServerIdentity(targetAccount, identity.displayName, identity.initials, color)
+                }
+            }
+                .onSuccess {
+                    if (generation == identityPersistenceGeneration && successNotice != null) {
+                        _state.update { it.copy(notice = successNotice, error = null) }
+                    }
+                }
+                .onFailure { error ->
+                    if (generation == identityPersistenceGeneration) {
+                        _state.update { it.copy(error = error.message ?: "Could not update session identity.") }
+                    }
+                }
+        }
+    }
+
+    private fun currentActiveServerAccount(): ServerAccount? {
+        val snapshot = _state.value.serverSnapshot
+        return snapshot.servers.firstOrNull { it.id == snapshot.activeServerId }
+    }
+
+    private suspend fun updateServerIdentity(
+        account: ServerAccount?,
+        displayName: String,
+        initials: String,
+        headerLogoColorHex: String,
+    ) {
+        account ?: return
+        authRepository.updateServerIdentity(
+            account = account,
+            displayName = displayName,
+            initials = initials,
+            headerLogoColorHex = headerLogoColorHex,
+        )
+    }
+
+    fun loadModels() {
+        loadServerSettings()
+    }
+
+    fun loadServerSettings() {
+        val repository = panelsRepository ?: return
+        val generation = ++serverSettingsGeneration
+        serverSettingsJob?.cancel()
+        serverSettingsJob = viewModelScope.launch {
+            _state.update { it.copy(isLoadingServerSettings = true, error = null, notice = null) }
+            val serverId = activeServerId
+            val cachedCliSessions = serverId?.let { localSettingsRepository.currentShowCliSessions(it) } ?: true
+            val cachedClaudeCodeSessions = serverId?.let { localSettingsRepository.currentShowClaudeCodeSessions(it) } ?: true
+            val (modelsResult, providersResult, profilesResult, settingsResult, updatesResult) = coroutineScope {
+                val models = async { runSuspendCatching { repository.models() } }
+                val providers = async { runSuspendCatching { repository.providers() } }
+                val profiles = async { runSuspendCatching { repository.profiles() } }
+                val settings = async { runSuspendCatching { repository.settings() } }
+                val updates = async { runSuspendCatching { repository.updatesCheck() } }
+                ServerSettingsResults(models.await(), providers.await(), profiles.await(), settings.await(), updates.await())
+            }
+            val settings = settingsResult.getOrNull()
+            val serverCliSessions = settings?.showCliSessions
+            val serverClaudeCodeSessions = settings?.showClaudeCodeSessions
+            if (generation != serverSettingsGeneration) return@launch
+            if (serverId != null && serverCliSessions != null) {
+                runSuspendCatching { localSettingsRepository.setShowCliSessions(serverId, serverCliSessions) }
+            }
+            if (serverId != null && serverClaudeCodeSessions != null) {
+                runSuspendCatching { localSettingsRepository.setShowClaudeCodeSessions(serverId, serverClaudeCodeSessions) }
+            }
+            if (generation != serverSettingsGeneration) return@launch
+            _state.update { current ->
+                current.copy(
+                    isLoadingServerSettings = false,
+                    models = modelsResult.getOrNull()?.models.orEmpty(),
+                    modelProviders = modelsResult.getOrNull()?.providers.orEmpty(),
+                    providers = providersResult.getOrNull()?.providers.orEmpty(),
+                    activeProvider = providersResult.getOrNull()?.activeProvider,
+                    providersError = providersResult.exceptionOrNull()?.message,
+                    defaultModel = settings?.defaultModel ?: modelsResult.getOrNull()?.defaultModel,
+                    defaultModelProvider = settings?.defaultModelProvider ?: modelsResult.getOrNull()?.activeProvider,
+                    profiles = profilesResult.getOrNull()?.profiles.orEmpty(),
+                    activeProfile = profilesResult.getOrNull()?.effectiveDefaultProfileName(),
+                    isSingleProfileMode = profilesResult.getOrNull()?.singleProfileMode == true,
+                    serverSettings = settings,
+                    serverUpdateState = updatesResult.getOrNull()?.webUiUpdateState() ?: current.serverUpdateState,
+                    showCliSessions = serverCliSessions ?: cachedCliSessions,
+                    cliSessionsServerSynced = serverCliSessions != null,
+                    cliSessionsError = null,
+                    showClaudeCodeSessions = serverClaudeCodeSessions ?: cachedClaudeCodeSessions,
+                    claudeCodeSessionsServerSynced = serverClaudeCodeSessions != null,
+                    claudeCodeSessionsError = null,
+                    error = listOfNotNull(
+                        modelsResult.exceptionOrNull()?.message,
+                        profilesResult.exceptionOrNull()?.message,
+                        settingsResult.exceptionOrNull()?.message,
+                    ).firstOrNull(),
+                )
+            }
+        }
+    }
+
+    fun setShowCliSessions(enabled: Boolean) {
+        val repository = panelsRepository ?: return
+        val serverId = activeServerId ?: return
+        val previous = _state.value.showCliSessions
+        val shouldSyncWithServer = _state.value.cliSessionsServerSynced
+        val generation = ++cliSessionsSaveGeneration
+        cliSessionsSaveJob?.cancel()
+        cliSessionsSaveJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    showCliSessions = enabled,
+                    isSavingCliSessions = true,
+                    cliSessionsError = null,
+                    notice = null,
+                    error = null,
+                )
+            }
+            runSuspendCatching { localSettingsRepository.setShowCliSessions(serverId, enabled) }
+            if (generation != cliSessionsSaveGeneration) return@launch
+            if (!shouldSyncWithServer) {
+                _state.update { it.copy(isSavingCliSessions = false) }
+                return@launch
+            }
+            runSuspendCatching { repository.updateSettings(showCliSessions = enabled) }
+                .onSuccess { response ->
+                    if (generation != cliSessionsSaveGeneration) return@onSuccess
+                    if (!response.isConfirmedShowCliSessions(enabled)) {
+                        localSettingsRepository.setShowCliSessions(serverId, previous)
+                        _state.update {
+                            it.copy(
+                                showCliSessions = previous,
+                                isSavingCliSessions = false,
+                                cliSessionsError = "The server did not confirm the session visibility change.",
+                                error = "The server did not confirm the session visibility change.",
+                            )
+                        }
+                        return@onSuccess
+                    }
+                    response.showCliSessions?.let { serverValue ->
+                        localSettingsRepository.setShowCliSessions(serverId, serverValue)
+                    }
+                    if (generation != cliSessionsSaveGeneration) return@onSuccess
+                    _state.update {
+                        it.copy(
+                            showCliSessions = response.showCliSessions ?: enabled,
+                            isSavingCliSessions = false,
+                            cliSessionsServerSynced = response.showCliSessions != null,
+                            cliSessionsError = null,
+                            notice = "CLI session visibility updated.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is kotlinx.coroutines.CancellationException || generation != cliSessionsSaveGeneration) return@onFailure
+                    localSettingsRepository.setShowCliSessions(serverId, previous)
+                    _state.update {
+                        it.copy(
+                            showCliSessions = previous,
+                            isSavingCliSessions = false,
+                            cliSessionsError = error.message ?: "Could not sync CLI session visibility.",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun setDictationProviderPreference(preference: DictationProviderPreference) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setDictationProviderPreference(preference) }
+                .onSuccess { _state.update { it.copy(dictationProviderPreference = preference, notice = "Interaction updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update dictation provider.") } }
+        }
+    }
+
+    fun setShowClaudeCodeSessions(enabled: Boolean) {
+        val repository = panelsRepository ?: return
+        val serverId = activeServerId ?: return
+        val previous = _state.value.showClaudeCodeSessions
+        val shouldSyncWithServer = _state.value.claudeCodeSessionsServerSynced
+        val generation = ++claudeCodeSessionsSaveGeneration
+        claudeCodeSessionsSaveJob?.cancel()
+        claudeCodeSessionsSaveJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    showClaudeCodeSessions = enabled,
+                    isSavingClaudeCodeSessions = true,
+                    claudeCodeSessionsError = null,
+                    notice = null,
+                    error = null,
+                )
+            }
+            runSuspendCatching { localSettingsRepository.setShowClaudeCodeSessions(serverId, enabled) }
+            if (generation != claudeCodeSessionsSaveGeneration) return@launch
+            if (!shouldSyncWithServer) {
+                _state.update { it.copy(isSavingClaudeCodeSessions = false) }
+                return@launch
+            }
+            runSuspendCatching { repository.updateClaudeCodeSessionVisibility(enabled) }
+                .onSuccess { response ->
+                    if (generation != claudeCodeSessionsSaveGeneration) return@onSuccess
+                    if (!response.isConfirmedShowClaudeCodeSessions(enabled)) {
+                        localSettingsRepository.setShowClaudeCodeSessions(serverId, previous)
+                        _state.update {
+                            it.copy(
+                                showClaudeCodeSessions = previous,
+                                isSavingClaudeCodeSessions = false,
+                                claudeCodeSessionsError = "The server did not confirm the Claude Code visibility change.",
+                            )
+                        }
+                        return@onSuccess
+                    }
+                    val serverValue = response.showClaudeCodeSessions ?: enabled
+                    localSettingsRepository.setShowClaudeCodeSessions(serverId, serverValue)
+                    if (generation != claudeCodeSessionsSaveGeneration) return@onSuccess
+                    _state.update {
+                        it.copy(
+                            showClaudeCodeSessions = serverValue,
+                            isSavingClaudeCodeSessions = false,
+                            claudeCodeSessionsServerSynced = response.showClaudeCodeSessions != null,
+                            claudeCodeSessionsError = null,
+                            notice = "Claude Code session visibility updated.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException || generation != claudeCodeSessionsSaveGeneration) return@onFailure
+                    localSettingsRepository.setShowClaudeCodeSessions(serverId, previous)
+                    _state.update {
+                        it.copy(
+                            showClaudeCodeSessions = previous,
+                            isSavingClaudeCodeSessions = false,
+                            claudeCodeSessionsError = error.message ?: "Could not sync Claude Code session visibility.",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun setShowThinkingAndToolCards(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setShowThinkingAndToolCards(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setThinkingCardsStartExpanded(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setThinkingCardsStartExpanded(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setToolCardsStartExpanded(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setToolCardsStartExpanded(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setHidesAttachmentPaths(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setHidesAttachmentPaths(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setShowsAssistantTurnTimestamps(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setShowsAssistantTurnTimestamps(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setRtlChatLayoutEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setRtlChatLayoutEnabled(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setWrapsCodeBlockLines(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setWrapsCodeBlockLines(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setStreamedTextAnimationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setStreamedTextAnimationEnabled(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setShowsStatusNotificationResponseExcerpts(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setShowsStatusNotificationResponseExcerpts(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Chat display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update chat display.") } }
+        }
+    }
+
+    fun setShowsResponseSpeed(enabled: Boolean) = updateChatDisplay {
+        localSettingsRepository.setShowsResponseSpeed(enabled)
+    }
+
+    fun setShowsChatFilesButton(enabled: Boolean) = updateChatDisplay {
+        localSettingsRepository.setShowsChatFilesButton(enabled)
+    }
+
+    fun setShowsChatGitControls(enabled: Boolean) = updateChatDisplay {
+        localSettingsRepository.setShowsChatGitControls(enabled)
+    }
+
+    fun setSessionRowShowMessageCount(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setSessionRowShowMessageCount(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Session display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update session display.") } }
+        }
+    }
+
+    fun setSessionRowShowWorkspace(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setSessionRowShowWorkspace(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Session display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update session display.") } }
+        }
+    }
+
+    fun setShowCronSessions(enabled: Boolean) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setShowCronSessions(enabled) }
+                .onSuccess { _state.update { it.copy(notice = "Session display updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update session display.") } }
+        }
+    }
+
+    fun setShowSubagentSessions(enabled: Boolean) = updateSessionDisplay {
+        localSettingsRepository.setShowSubagentSessions(enabled)
+    }
+
+    fun setShowTasksSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowTasksSection(enabled)
+    }
+
+    fun setShowKanbanSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowKanbanSection(enabled)
+    }
+
+    fun setShowSkillsSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowSkillsSection(enabled)
+    }
+
+    fun setShowMemorySection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowMemorySection(enabled)
+    }
+
+    fun setShowInsightsSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowInsightsSection(enabled)
+    }
+
+    fun setShowActiveProfileSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowActiveProfileSection(enabled)
+    }
+
+    fun setShowProjectsSection(enabled: Boolean) = updateMainPageDisplay {
+        localSettingsRepository.setShowProjectsSection(enabled)
+    }
+
+    private fun updateChatDisplay(update: suspend () -> Unit) {
+        persistDisplaySetting(update, "Chat display updated.", "Could not update chat display.")
+    }
+
+    private fun updateSessionDisplay(update: suspend () -> Unit) {
+        persistDisplaySetting(update, "Session display updated.", "Could not update session display.")
+    }
+
+    private fun updateMainPageDisplay(update: suspend () -> Unit) {
+        persistDisplaySetting(update, "Main page updated.", "Could not update the main page.")
+    }
+
+    private fun persistDisplaySetting(update: suspend () -> Unit, notice: String, fallbackError: String) {
+        viewModelScope.launch {
+            runSuspendCatching { update() }
+                .onSuccess { _state.update { it.copy(notice = notice, error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: fallbackError) } }
+        }
+    }
+
+    fun setResponseCompletionNotificationsEnabled(enabled: Boolean, statusMessage: String? = null) {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setResponseCompletionNotificationsEnabled(enabled) }
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            responseCompletionNotificationsEnabled = enabled,
+                            responseCompletionNotificationStatusMessage = statusMessage,
+                            notice = if (enabled) "Response complete alerts enabled." else "Response complete alerts disabled.",
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not update notification alerts.") } }
+        }
+    }
+
+    fun markResponseCompletionNotificationPermissionRequested() {
+        viewModelScope.launch {
+            runSuspendCatching { localSettingsRepository.setHasRequestedResponseCompletionNotificationPermission(true) }
+                .onSuccess { _state.update { it.copy(hasRequestedResponseCompletionNotificationPermission = true) } }
+        }
+    }
+
+    fun refreshResponseCompletionNotificationPermission(canPostNotifications: Boolean) {
+        viewModelScope.launch {
+            val preferenceEnabled = localSettingsRepository.responseCompletionNotificationsEnabled.first()
+            if (!canPostNotifications && preferenceEnabled) {
+                runSuspendCatching { localSettingsRepository.setResponseCompletionNotificationsEnabled(false) }
+                    .onSuccess {
+                        _state.update {
+                            it.copy(
+                                responseCompletionNotificationsEnabled = false,
+                                responseCompletionNotificationStatusMessage = "Android notifications disabled.",
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        _state.update { it.copy(error = error.message ?: "Could not update notification alerts.") }
+                    }
+            } else {
+                _state.update {
+                    it.copy(
+                        responseCompletionNotificationsEnabled = preferenceEnabled,
+                        responseCompletionNotificationStatusMessage = null,
+                    )
+                }
+            }
+        }
+    }
+
+    fun handleResponseCompletionNotificationPermissionResult(granted: Boolean) {
+        setResponseCompletionNotificationsEnabled(
+            enabled = granted,
+            statusMessage = if (granted) "Android notifications allowed." else "Android notifications disabled.",
+        )
+    }
+
+    fun activateServer(id: String) {
+        identityPersistenceGeneration += 1
+        identityPersistenceJob?.cancel()
+        viewModelScope.launch {
+            runSuspendCatching { authRepository.activate(id) }
+                .onSuccess { _state.update { it.copy(notice = "Active server updated.", error = null) } }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not switch server.") } }
+        }
+    }
+
+    fun openIdentityEditor(account: ServerAccount) {
+        _state.update {
+            it.copy(
+                identityEditorServer = account,
+                identityDraft = ServerIdentityDraft(
+                    displayName = account.displayName,
+                    initials = account.initials,
+                    headerLogoColorHex = normalizedHeaderColorHex(account.headerLogoColorHex),
+                ),
+                notice = null,
+                error = null,
+            )
+        }
+    }
+
+    fun updateIdentityDraft(draft: ServerIdentityDraft) {
+        _state.update {
+            it.copy(
+                identityDraft = draft.copy(
+                    displayName = SavedStatePolicy.boundedInput(draft.displayName),
+                    initials = normalizedInitials(draft.initials),
+                ),
+                error = null,
+            )
+        }
+    }
+
+    fun dismissIdentityEditor() {
+        _state.update { it.copy(identityEditorServer = null, identityDraft = ServerIdentityDraft()) }
+    }
+
+    fun saveIdentityDraft() {
+        val account = _state.value.identityEditorServer ?: return
+        val draft = _state.value.identityDraft
+        val finalName = draft.displayName.trim().ifBlank { account.displayName }
+        val finalInitials = displayInitials(
+            displayName = finalName,
+            storedInitials = draft.initials,
+            fallbackFullName = account.displayName.ifBlank { account.urlString },
+        )
+        val color = normalizedHeaderColorHex(draft.headerLogoColorHex)
+        viewModelScope.launch {
+            runSuspendCatching {
+                authRepository.updateServerIdentity(
+                    account = account,
+                    displayName = finalName,
+                    initials = finalInitials,
+                    headerLogoColorHex = color,
+                ) ?: error("Server is no longer configured.")
+            }
+                .onSuccess { updated ->
+                    _state.update {
+                        it.copy(
+                            identityEditorServer = null,
+                            identityDraft = ServerIdentityDraft(),
+                            notice = "Identity saved for ${updated.displayName}.",
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(error = error.message ?: "Could not save identity.") } }
+        }
+    }
+
+    fun openHeaderEditor(account: ServerAccount) {
+        val text = authRepository.customHeaders(account.id)
+            .joinToString(separator = "\n") { "${it.name}: ${it.value}" }
+        _state.update {
+            it.copy(
+                headerEditorServer = account,
+                headerEditorText = text,
+                headerEditorError = null,
+                notice = null,
+                error = null,
+            )
+        }
+    }
+
+    fun updateHeaderEditorText(text: String) {
+        _state.update { it.copy(headerEditorText = text, headerEditorError = null) }
+    }
+
+    fun dismissHeaderEditor() {
+        _state.update { it.copy(headerEditorServer = null, headerEditorText = "", headerEditorError = null) }
+    }
+
+    fun saveHeaderEditor() {
+        val server = _state.value.headerEditorServer ?: return
+        val parsed = runCatching { parseCustomHeaderLines(_state.value.headerEditorText) }
+        parsed.onFailure { error ->
+            _state.update { it.copy(headerEditorError = error.message ?: "Could not parse custom headers.") }
+        }.getOrNull()?.let { headers ->
+            viewModelScope.launch {
+                runSuspendCatching { authRepository.saveCustomHeaders(server.id, headers) }
+                    .onSuccess {
+                        _state.update {
+                            it.copy(
+                                customHeadersByServer = it.customHeadersByServer + (server.id to headers),
+                                headerEditorServer = null,
+                                headerEditorText = "",
+                                headerEditorError = null,
+                                notice = if (headers.isEmpty()) "Custom headers cleared." else "Custom headers saved.",
+                                error = null,
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        _state.update { it.copy(headerEditorError = error.message ?: "Could not save custom headers.") }
+                    }
+            }
+        }
+    }
+
+    fun openAddServer() {
+        _state.update {
+            it.copy(
+                addServerDialogVisible = true,
+                addServerUrl = "",
+                addServerPassword = "",
+                addServerHeadersText = "",
+                addServerDisplayName = "",
+                addServerInitials = "",
+                addServerHeaderColorHex = DefaultServerHeaderColorHex,
+                addServerNeedsPassword = false,
+                addServerError = null,
+                notice = null,
+                error = null,
+            )
+        }
+    }
+
+    fun dismissAddServer() {
+        if (_state.value.isAddingServer) return
+        _state.update {
+            it.copy(
+                addServerDialogVisible = false,
+                addServerUrl = "",
+                addServerPassword = "",
+                addServerHeadersText = "",
+                addServerDisplayName = "",
+                addServerInitials = "",
+                addServerHeaderColorHex = DefaultServerHeaderColorHex,
+                addServerNeedsPassword = false,
+                addServerError = null,
+            )
+        }
+    }
+
+    fun updateAddServerUrl(value: String) {
+        _state.update { it.copy(addServerUrl = SavedStatePolicy.boundedInput(value), addServerError = null) }
+    }
+
+    fun updateAddServerPassword(value: String) {
+        _state.update { it.copy(addServerPassword = value, addServerError = null) }
+    }
+
+    fun updateAddServerHeadersText(value: String) {
+        _state.update { it.copy(addServerHeadersText = value, addServerError = null) }
+    }
+
+    fun updateAddServerDisplayName(value: String) {
+        _state.update { it.copy(addServerDisplayName = SavedStatePolicy.boundedInput(value), addServerError = null) }
+    }
+
+    fun updateAddServerInitials(value: String) {
+        _state.update { it.copy(addServerInitials = normalizedInitials(value), addServerError = null) }
+    }
+
+    fun updateAddServerHeaderColor(hex: String) {
+        _state.update { it.copy(addServerHeaderColorHex = normalizedHeaderColorHex(hex), addServerError = null) }
+    }
+
+    fun submitAddServer() {
+        val snapshot = _state.value
+        if (snapshot.addServerUrl.isBlank()) {
+            _state.update { it.copy(addServerError = "Server URL is required.") }
+            return
+        }
+        val headers = runCatching { parseCustomHeaderLines(snapshot.addServerHeadersText) }
+            .onFailure { error -> _state.update { it.copy(addServerError = error.message ?: "Could not parse custom headers.") } }
+            .getOrNull() ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isAddingServer = true, addServerError = null, notice = null, error = null) }
+            runSuspendCatching {
+                authRepository.addServer(
+                    serverUrlString = snapshot.addServerUrl,
+                    password = snapshot.addServerPassword,
+                    customHeaders = headers,
+                    displayName = snapshot.addServerDisplayName,
+                    initials = snapshot.addServerInitials,
+                    headerLogoColorHex = normalizedHeaderColorHex(snapshot.addServerHeaderColorHex),
+                )
+            }
+                .onSuccess { result ->
+                    when (result) {
+                        is AddServerResult.Added -> {
+                            val finalName = snapshot.addServerDisplayName.trim().ifBlank { result.account.displayName }
+                            val finalInitials = displayInitials(
+                                displayName = finalName,
+                                storedInitials = snapshot.addServerInitials,
+                                fallbackFullName = result.account.displayName,
+                            )
+                            val savedAccount = authRepository.updateServerIdentity(
+                                account = result.account,
+                                displayName = finalName,
+                                initials = finalInitials,
+                                headerLogoColorHex = normalizedHeaderColorHex(snapshot.addServerHeaderColorHex),
+                            ) ?: result.account
+                            _state.update {
+                                it.copy(
+                                    isAddingServer = false,
+                                    addServerDialogVisible = false,
+                                    addServerUrl = "",
+                                    addServerPassword = "",
+                                    addServerHeadersText = "",
+                                    addServerDisplayName = "",
+                                    addServerInitials = "",
+                                    addServerHeaderColorHex = DefaultServerHeaderColorHex,
+                                    addServerNeedsPassword = false,
+                                    addServerError = null,
+                                    notice = "Server added: ${savedAccount.displayName}.",
+                                    error = null,
+                                )
+                            }
+                            loadServerSettings()
+                        }
+                        AddServerResult.NeedsPassword -> {
+                            _state.update {
+                                it.copy(
+                                    isAddingServer = false,
+                                    addServerNeedsPassword = true,
+                                    addServerError = null,
+                                    notice = null,
+                                )
+                            }
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            isAddingServer = false,
+                            addServerError = error.message ?: "Could not add server.",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun requestClearCache(account: ServerAccount) {
+        _state.update { it.copy(clearCacheServer = account, notice = null, error = null) }
+    }
+
+    fun cancelClearCache() {
+        _state.update { it.copy(clearCacheServer = null) }
+    }
+
+    fun confirmClearCache() {
+        val account = _state.value.clearCacheServer ?: return
+        val repository = cacheMaintenanceRepository ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isClearingCache = true, error = null, notice = null) }
+            runSuspendCatching { repository.clearServer(account.urlString) }
+                .onSuccess {
+                    _state.update { it.copy(isClearingCache = false, clearCacheServer = null, notice = "Offline cache cleared for ${account.displayName}.") }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(isClearingCache = false, error = error.message ?: "Could not clear cache.") }
+                }
+        }
+    }
+
+    fun runCacheMaintenance() {
+        val repository = cacheMaintenanceRepository ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isMaintainingCache = true, error = null, notice = null) }
+            runSuspendCatching { repository.maintenance() }
+                .onSuccess { _state.update { it.copy(isMaintainingCache = false, notice = "Expired cache cleaned up.") } }
+                .onFailure { error ->
+                    _state.update { it.copy(isMaintainingCache = false, error = error.message ?: "Could not clean up cache.") }
+                }
+        }
+    }
+
+    fun checkForUpdatesManually() {
+        val repository = panelsRepository ?: return
+        val phase = _state.value.updateApplyPhase
+        if (_state.value.isCheckingForUpdates || phase == ServerUpdateApplyPhase.Applying || phase == ServerUpdateApplyPhase.Recovering) {
+            return
+        }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isCheckingForUpdates = true,
+                    forcedUpdateCheckOutcome = null,
+                    showForcedUpdateCheckResult = false,
+                    error = null,
+                    notice = null,
+                )
+            }
+            runSuspendCatching { repository.updatesCheckForced() }
+                .onSuccess { response ->
+                    _state.update {
+                        it.copy(
+                            isCheckingForUpdates = false,
+                            serverUpdateState = response.webUiUpdateState(),
+                            forcedUpdateCheckOutcome = response.forcedCheckOutcome(),
+                            showForcedUpdateCheckResult = true,
+                        )
+                    }
+                }
+                .onFailure {
+                    _state.update {
+                        it.copy(
+                            isCheckingForUpdates = false,
+                            forcedUpdateCheckOutcome = ForcedUpdateCheckOutcome.Error,
+                            showForcedUpdateCheckResult = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun dismissForcedUpdateCheckResult() {
+        _state.update { it.copy(showForcedUpdateCheckResult = false) }
+    }
+
+    fun requestServerUpdate() {
+        _state.update { it.copy(confirmServerUpdate = true) }
+    }
+
+    fun cancelServerUpdate() {
+        _state.update { it.copy(confirmServerUpdate = false) }
+    }
+
+    fun applyServerUpdate() {
+        val repository = panelsRepository ?: return
+        val snapshot = _state.value
+        if (snapshot.isCheckingForUpdates) return
+        when (snapshot.updateApplyPhase) {
+            ServerUpdateApplyPhase.Idle,
+            ServerUpdateApplyPhase.Blocked,
+            ServerUpdateApplyPhase.Failed,
+            -> Unit
+            ServerUpdateApplyPhase.Applying,
+            ServerUpdateApplyPhase.Recovering,
+            -> return
+        }
+
+        viewModelScope.launch {
+            val previousVersion = _state.value.serverSettings?.webuiVersion
+            _state.update {
+                it.copy(
+                    confirmServerUpdate = false,
+                    updateApplyPhase = ServerUpdateApplyPhase.Applying,
+                    updateApplyMessage = null,
+                    error = null,
+                    notice = null,
+                )
+            }
+            runSuspendCatching { repository.applyUpdate("webui") }
+                .onSuccess { response ->
+                    when (response.applyOutcome()) {
+                        ServerUpdateApplyOutcome.Applying -> {
+                            _state.update { it.copy(updateApplyPhase = ServerUpdateApplyPhase.Recovering) }
+                            waitForServerToReturn(previousVersion)
+                        }
+                        ServerUpdateApplyOutcome.RestartBlocked -> {
+                            _state.update {
+                                it.copy(
+                                    updateApplyPhase = ServerUpdateApplyPhase.Blocked,
+                                    updateApplyMessage = response.displayMessage("The server is busy with active work. Wait for it to finish, then retry."),
+                                )
+                            }
+                        }
+                        ServerUpdateApplyOutcome.Failed -> {
+                            _state.update {
+                                it.copy(
+                                    updateApplyPhase = ServerUpdateApplyPhase.Failed,
+                                    updateApplyMessage = response.displayMessage("The update could not be applied."),
+                                )
+                            }
+                        }
+                    }
+                }
+                .onFailure {
+                    _state.update {
+                        it.copy(
+                            updateApplyPhase = ServerUpdateApplyPhase.Failed,
+                            updateApplyMessage = "Could not reach the server to start the update.",
+                        )
+                    }
+                }
+        }
+    }
+
+    private suspend fun waitForServerToReturn(previousVersion: String?) {
+        val repository = panelsRepository ?: return
+        repeat(30) {
+            delay(2_000)
+            val settings = try {
+                repository.settings()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                return@repeat
+            }
+            val updateState = try {
+                repository.updatesCheck().webUiUpdateState()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                null
+            }
+                ?: WebUiUpdateState.Unavailable
+            val restartConfirmed = (settings.webuiVersion != null && settings.webuiVersion != previousVersion) ||
+                updateState == WebUiUpdateState.UpToDate
+            if (restartConfirmed) {
+                _state.update {
+                    it.copy(
+                        serverSettings = settings,
+                        serverUpdateState = updateState,
+                        updateApplyPhase = ServerUpdateApplyPhase.Idle,
+                        updateApplyMessage = null,
+                        notice = "Server update finished.",
+                    )
+                }
+                return
+            }
+        }
+
+        val finalSettings = try {
+            repository.settings()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            null
+        }
+        val finalUpdateState = try {
+            repository.updatesCheck().webUiUpdateState()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            null
+        }
+        _state.update { current ->
+            val resolvedUpdateState = finalUpdateState ?: current.serverUpdateState
+            if (resolvedUpdateState is WebUiUpdateState.UpdateAvailable) {
+                current.copy(
+                    serverSettings = finalSettings ?: current.serverSettings,
+                    serverUpdateState = resolvedUpdateState,
+                    updateApplyPhase = ServerUpdateApplyPhase.Failed,
+                    updateApplyMessage = "The update is taking longer than expected to finish. Try again in a moment.",
+                )
+            } else {
+                current.copy(
+                    serverSettings = finalSettings ?: current.serverSettings,
+                    serverUpdateState = resolvedUpdateState,
+                    updateApplyPhase = ServerUpdateApplyPhase.Idle,
+                    updateApplyMessage = null,
+                )
+            }
+        }
+    }
+
+    fun requestForgetServer(account: ServerAccount) {
+        _state.update { it.copy(forgetServer = account, notice = null, error = null) }
+    }
+
+    fun cancelForgetServer() {
+        _state.update { it.copy(forgetServer = null) }
+    }
+
+    fun confirmForgetServer() {
+        val account = _state.value.forgetServer ?: return
+        val wasActive = account.id == _state.value.serverSnapshot.activeServerId
+        _state.update { it.copy(isForgettingServer = true, error = null) }
+        viewModelScope.launch {
+            runSuspendCatching {
+                cacheMaintenanceRepository?.clearServer(account.urlString)
+                authRepository.forget(account.id)
+            }
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            forgetServer = null,
+                            isForgettingServer = false,
+                            customHeadersByServer = it.customHeadersByServer - account.id,
+                            notice = "Server removed.",
+                            error = null,
+                        )
+                    }
+                    if (wasActive && authRepository.state.value !is AuthState.LoggedIn) {
+                        eventChannel.send(SettingsEvent.SignedOut)
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            isForgettingServer = false,
+                            error = error.message ?: "Could not remove server.",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun saveDefaultProfile(profile: ProfileSummary) {
+        val repository = panelsRepository ?: return
+        val name = profile.normalizedProfileName() ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isSavingDefaultProfile = true, error = null, notice = null) }
+            runSuspendCatching { repository.switchProfile(name) }
+                .onSuccess { response ->
+                    val responseError = response.error?.trim()?.takeIf { it.isNotBlank() }
+                    if (responseError != null || !response.isConfirmedProfileSwitch(name)) {
+                        val message = responseError ?: "The server did not confirm the profile change."
+                        _state.update {
+                            it.copy(
+                                isSavingDefaultProfile = false,
+                                defaultProfilePickerError = message,
+                                error = message,
+                            )
+                        }
+                        return@onSuccess
+                    }
+                    val profiles = response.profiles ?: _state.value.profiles
+                    val resolved = response.active?.trim()?.takeIf { it.isNotBlank() }
+                        ?: profiles.firstOrNull { it.isActive == true }?.normalizedProfileName()
+                        ?: name
+                    _state.update {
+                        it.copy(
+                            isSavingDefaultProfile = false,
+                            showDefaultProfilePicker = false,
+                            profiles = profiles,
+                            activeProfile = resolved,
+                            defaultModel = response.defaultModel ?: it.defaultModel,
+                            defaultModelProvider = response.defaultModelProvider ?: it.defaultModelProvider,
+                            notice = "Default profile saved.",
+                            defaultProfilePickerError = null,
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    val message = error.message ?: "Could not save default profile."
+                    _state.update { it.copy(isSavingDefaultProfile = false, defaultProfilePickerError = message, error = message) }
+                }
+        }
+    }
+
+    fun saveDefaultModel(model: ModelSummary) {
+        saveDefaultModelId(model.modelIdentifier.orEmpty(), model.normalizedProvider)
+    }
+
+    fun saveDefaultModelId(rawModelId: String) {
+        saveDefaultModelId(rawModelId, providerId = null)
+    }
+
+    private fun saveDefaultModelId(rawModelId: String, providerId: String?) {
+        val repository = panelsRepository ?: return
+        val id = rawModelId.trim()
+        if (id.isBlank()) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSavingDefaultModel = true, error = null, notice = null) }
+            runSuspendCatching { repository.saveDefaultModel(id, providerId) }
+                .onSuccess { response ->
+                    val responseError = response.error?.trim()?.takeIf { it.isNotBlank() }
+                    if (responseError != null || !response.isConfirmedDefaultModel(providerId)) {
+                        val message = responseError ?: "The server did not confirm the change."
+                        _state.update {
+                            it.copy(
+                                isSavingDefaultModel = false,
+                                defaultModelPickerError = message,
+                                error = message,
+                            )
+                        }
+                        return@onSuccess
+                    }
+                    _state.update {
+                        it.copy(
+                            isSavingDefaultModel = false,
+                            showDefaultModelPicker = false,
+                            defaultModel = response.model ?: id,
+                            defaultModelProvider = response.provider ?: providerId,
+                            notice = "Default model saved.",
+                            defaultModelPickerError = null,
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    val message = error.message ?: "Could not save default model."
+                    _state.update { it.copy(isSavingDefaultModel = false, defaultModelPickerError = message, error = message) }
+                }
+        }
+    }
+
+    fun openDefaultModelPicker() {
+        _state.update {
+            it.copy(
+                showDefaultModelPicker = true,
+                defaultModelPickerError = null,
+                notice = null,
+                error = null,
+            )
+        }
+        refreshLiveModels()
+    }
+
+    fun dismissDefaultModelPicker() {
+        _state.update { it.copy(showDefaultModelPicker = false, defaultModelPickerError = null) }
+    }
+
+    fun openDefaultProfilePicker() {
+        _state.update {
+            it.copy(
+                showDefaultProfilePicker = true,
+                defaultProfilePickerError = null,
+                notice = null,
+                error = null,
+            )
+        }
+    }
+
+    fun dismissDefaultProfilePicker() {
+        _state.update {
+            it.copy(
+                showDefaultProfilePicker = false,
+                defaultProfilePickerError = null,
+                showCreateProfileDialog = false,
+                profileCreateError = null,
+            )
+        }
+    }
+
+    fun openCreateProfileDialog() {
+        _state.update { it.copy(showCreateProfileDialog = true, profileCreateError = null) }
+    }
+
+    fun dismissCreateProfileDialog() {
+        if (_state.value.isCreatingProfile) return
+        _state.update { it.copy(showCreateProfileDialog = false, profileCreateError = null) }
+    }
+
+    fun createProfile(
+        rawName: String,
+        cloneConfig: Boolean,
+        rawDefaultModel: String,
+        rawModelProvider: String,
+        rawBaseUrl: String,
+        rawApiKey: String,
+    ) {
+        val repository = panelsRepository ?: return
+        val name = rawName.trim().lowercase(Locale.US)
+        val defaultModel = rawDefaultModel.trim().takeIf { it.isNotBlank() }
+        val modelProvider = rawModelProvider.trim().takeIf { it.isNotBlank() }
+        val baseUrl = rawBaseUrl.trim().takeIf { it.isNotBlank() }
+        val apiKey = rawApiKey.trim().takeIf { it.isNotBlank() }
+        when {
+            !ProfileNameRules.isValid(name) -> {
+                _state.update { it.copy(profileCreateError = "Use lowercase letters, numbers, hyphens, or underscores; start with a letter or number.") }
+                return
+            }
+            baseUrl != null && !ProfileNameRules.isValidBaseUrl(baseUrl) -> {
+                _state.update { it.copy(profileCreateError = "Base URL must start with http:// or https://.") }
+                return
+            }
+        }
+
+        viewModelScope.launch {
+            _state.update { it.copy(isCreatingProfile = true, profileCreateError = null, error = null, notice = null) }
+            runSuspendCatching {
+                repository.createProfile(
+                    name = name,
+                    cloneConfig = cloneConfig,
+                    defaultModel = defaultModel,
+                    modelProvider = modelProvider?.takeUnless { it == "default" },
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                )
+            }
+                .onSuccess { response ->
+                    val responseError = response.error?.trim()?.takeIf { it.isNotBlank() }
+                    if (responseError != null || !response.isConfirmedMutation()) {
+                        val message = responseError ?: "The server did not confirm profile creation."
+                        _state.update {
+                            it.copy(
+                                isCreatingProfile = false,
+                                profileCreateError = message,
+                                error = message,
+                            )
+                        }
+                        return@onSuccess
+                    }
+                    val created = response.profile
+                    _state.update { current ->
+                        val profiles = if (created != null && current.profiles.none { it.normalizedProfileName() == created.normalizedProfileName() }) {
+                            current.profiles + created
+                        } else {
+                            current.profiles
+                        }
+                        current.copy(
+                            isCreatingProfile = false,
+                            showCreateProfileDialog = false,
+                            profiles = profiles,
+                            profileCreateError = null,
+                            notice = "Profile created.",
+                            error = null,
+                        )
+                    }
+                    loadServerSettings()
+                }
+                .onFailure { error ->
+                    val message = error.message ?: "Could not create profile."
+                    _state.update { it.copy(isCreatingProfile = false, profileCreateError = message, error = message) }
+                }
+        }
+    }
+
+    private fun refreshLiveModels() {
+        val repository = panelsRepository ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isLoadingLiveModels = true) }
+            runSuspendCatching { repository.modelsLive() }
+                .onSuccess { live ->
+                    _state.update { it.copy(isLoadingLiveModels = false, models = overlayLiveModels(it.models, live)) }
+                }
+                .onFailure {
+                    _state.update { it.copy(isLoadingLiveModels = false) }
+                }
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            _state.update { it.copy(isSigningOut = true, error = null) }
+            runSuspendCatching { authRepository.logout() }
+                .onSuccess {
+                    _state.update { it.copy(isSigningOut = false) }
+                    eventChannel.send(SettingsEvent.SignedOut)
+                }
+                .onFailure { error -> _state.update { it.copy(isSigningOut = false, error = error.message) } }
+        }
+    }
+
+}
+
+private const val SETTINGS_SAVED_TRANSIENT_STATE = "settings_transient_state"
+const val DefaultServerHeaderColorHex = "#FFD700"
+
+val ServerHeaderColorPresets = listOf(
+    DefaultServerHeaderColorHex,
+    "#5B7CFF",
+    "#AF52DE",
+    "#FF3B30",
+    "#34C759",
+    "#FFFFFF",
+)
+
+fun normalizedInitials(value: String): String =
+    value.filter { it.isLetterOrDigit() }.take(3).uppercase()
+
+fun displayInitials(
+    displayName: String,
+    storedInitials: String,
+    fallbackFullName: String,
+): String {
+    normalizedInitials(storedInitials).takeIf { it.isNotBlank() }?.let { return it }
+    val words = Regex("[A-Za-z0-9]+")
+        .findAll(displayName.ifBlank { fallbackFullName })
+        .map { it.value }
+        .toList()
+    val initials = when {
+        words.size >= 2 -> "${words.first().first()}${words.last().first()}"
+        words.size == 1 -> words.first().take(2)
+        else -> "HX"
+    }
+    return normalizedInitials(initials).ifBlank { "HX" }
+}
+
+fun normalizedHeaderColorHex(hex: String): String {
+    val raw = hex.trim().removePrefix("#").uppercase()
+    return if (raw.matches(Regex("[0-9A-F]{6}"))) "#$raw" else DefaultServerHeaderColorHex
+}

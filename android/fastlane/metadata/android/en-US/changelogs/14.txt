@@ -1,0 +1,1 @@
+Improves Android reliability, security, and responsiveness. Fixes voice-note and share-intent races, Git actions that could report false success, chat pagination and draft persistence failures, link-preview memory pressure, cross-origin authentication handling, and oversized server errors. Migrates secure data to Android Keystore AES-GCM and speeds up independent server requests.

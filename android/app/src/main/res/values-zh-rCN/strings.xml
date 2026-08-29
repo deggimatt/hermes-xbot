@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">Hermex</string>
+    <string name="share_target_label">发送 ? Hermex</string>
+    <string name="shortcut_sessions_short">会话</string>
+    <string name="shortcut_sessions_long">会话</string>
+    <string name="shortcut_new_session_short">新建会话</string>
+    <string name="shortcut_new_session_long">开始新会话</string>
+    <string name="shortcut_new_voice_short">语音输入</string>
+    <string name="shortcut_new_voice_long">语音输入</string>
+    <string name="widget_description">新建聊天</string>
+    <string name="widget_subtitle">Jump back into your agent workspace.</string>
+    <string name="widget_open_sessions">会话</string>
+    <string name="widget_new_session">新建会话</string>
+    <string name="widget_new_voice">语音输入</string>
+    <string name="nav_tasks">任务</string>
+    <string name="nav_kanban">看板</string>
+    <string name="nav_skills">技能</string>
+    <string name="nav_memory">记忆</string>
+    <string name="nav_insights">分析</string>
+    <string name="nav_active_profile">当前配置文件</string>
+    <string name="nav_projects">项目</string>
+    <string name="sessions_title">会话</string>
+    <string name="archived_sessions_title">已归档会话</string>
+    <string name="new_chat">新建聊天</string>
+    <string name="search_sessions">搜索会话</string>
+    <string name="close_search">关闭搜索</string>
+    <string name="settings_title">设置</string>
+</resources>

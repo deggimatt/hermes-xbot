@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">Hermex</string>
+    <string name="share_target_label">Verzenden ? Hermex</string>
+    <string name="shortcut_sessions_short">Sessies</string>
+    <string name="shortcut_sessions_long">Sessies</string>
+    <string name="shortcut_new_session_short">Nieuwe sessie</string>
+    <string name="shortcut_new_session_long">Een nieuwe sessie starten</string>
+    <string name="shortcut_new_voice_short">Spraakinvoer</string>
+    <string name="shortcut_new_voice_long">Spraakinvoer</string>
+    <string name="widget_description">Nieuwe chat</string>
+    <string name="widget_subtitle">Jump back into your agent workspace.</string>
+    <string name="widget_open_sessions">Sessies</string>
+    <string name="widget_new_session">Nieuwe sessie</string>
+    <string name="widget_new_voice">Spraakinvoer</string>
+    <string name="nav_tasks">Taken</string>
+    <string name="nav_kanban">Kanban</string>
+    <string name="nav_skills">Vaardigheden</string>
+    <string name="nav_memory">Geheugen</string>
+    <string name="nav_insights">Statistieken</string>
+    <string name="nav_active_profile">Actief profiel</string>
+    <string name="nav_projects">Projecten</string>
+    <string name="sessions_title">Sessies</string>
+    <string name="archived_sessions_title">Gearchiveerde sessies</string>
+    <string name="new_chat">Nieuwe chat</string>
+    <string name="search_sessions">Sessies zoeken</string>
+    <string name="close_search">Zoeken sluiten</string>
+    <string name="settings_title">Instellingen</string>
+</resources>
